@@ -6,7 +6,7 @@ const (
 	RegisterNewUser = "login"
 	NewChat         = "chat"
 	CloseLocalChat  = "\\q"
-	CloseRemoteChat
+	CloseRemoteChat = "\\rq"
 )
 
 func Parse(data []byte) (command, arg string) {
