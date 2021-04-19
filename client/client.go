@@ -16,12 +16,16 @@ import (
 var errCtxCanceled = errors.New("context is canceled")
 
 type Client struct {
-	conn   net.Conn
-	inCh   chan []byte
-	stopCh chan struct{}
+	conn     net.Conn
+	inCh     chan []byte
+	stopCh   chan struct{}
+	isClosed bool
 }
 
 func New(addr string) (*Client, error) {
+	log.SetFlags(0)
+	log.SetPrefix("> ")
+
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		return nil, err
@@ -35,6 +39,7 @@ func (c *Client) Start(ctx context.Context) {
 }
 
 func (c *Client) Stop(cancel context.CancelFunc) {
+	c.isClosed = true
 	cancel()
 
 	<-c.stopCh
@@ -47,12 +52,12 @@ func (c *Client) readStdin(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		default:
-			fmt.Print("> ")
+			log.Printf("")
 			data, err := buf.ReadBytes('\n')
 			if err == io.EOF {
 				return
 			} else if err != nil {
-				log.Printf("ошибка чтения из консоли: %s", err)
+				print(fmt.Sprintf("ошибка чтения из консоли: %s\n", err))
 				continue
 			}
 
@@ -72,10 +77,13 @@ func (c *Client) readSrvConn(ctx context.Context) {
 			if err == io.EOF {
 				return
 			} else if err != nil {
+				if c.isClosed {
+					return
+				}
 				log.Printf("ошибка чтения из буфера: %s", err)
 				continue
 			}
-			fmt.Print(string(data[:len(data)-1]) + "\n> ")
+			log.Printf(string(data))
 		}
 	}
 }
@@ -94,21 +102,23 @@ func (c *Client) scanInput(ctx context.Context) {
 		case data := <-c.inCh:
 			command, arg := cmd.Parse(data)
 
-			if arg == "" {
-				fmt.Print("необходим аргумент\n> ")
-				continue
-			}
-
 			switch command {
 			case cmd.RegisterNewUser:
+				if arg == "" {
+					log.Printf("введите ваше имя")
+					continue
+				}
 				if err := c.registerUser(ctx, arg); err != nil {
-					fmt.Printf("ошибка регистрации пользователя %s: %s", arg, err)
+					log.Printf("ошибка регистрации пользователя %s: %s", arg, err)
 				}
 			case cmd.NewChat:
+				if arg == "" {
+					log.Printf("введите имя собеседника")
+					continue
+				}
 				c.chat(ctx, arg)
-				fmt.Print("чат завершен\n> ")
 			default:
-				fmt.Printf("неверная команда %s: доступны команды login и chat с аргументом <name>\n", command)
+				log.Printf("неверная команда %s: доступны команды login и chat с аргументом <name>", command)
 			}
 		}
 	}
@@ -134,8 +144,8 @@ func (c *Client) chat(ctx context.Context, name string) {
 		case <-ctx.Done():
 			return
 		case data := <-c.inCh:
-			if string(data) == cmd.CloseLocalChat {
-				if _, err := c.conn.Write([]byte(cmd.CloseRemoteChat + "n")); err != nil {
+			if string(data) == cmd.CloseChat {
+				if _, err := c.conn.Write([]byte(cmd.CloseChat + "\n")); err != nil {
 					log.Printf("ошибка отправки данных в чат %s\n", err)
 				}
 				return

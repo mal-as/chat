@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"strings"
 	"sync"
 
 	"github.com/mal-as/chat/cmd"
@@ -81,6 +82,7 @@ func (s *Server) serve(ctx context.Context) {
 func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	defer s.wg.Done()
 	defer conn.Close()
+	defer delete(s.activeConns, conn.RemoteAddr())
 
 	s.activeConns[conn.RemoteAddr()] = conn
 	log.Printf("установлено новое соединение с %s\n", conn.RemoteAddr())
@@ -93,7 +95,6 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 		default:
 			data, err := buf.ReadBytes('\n')
 			if err == io.EOF {
-				delete(s.activeConns, conn.RemoteAddr())
 				log.Printf("соединение с %s закрыто\n", conn.RemoteAddr())
 				return
 			} else if err != nil {
@@ -115,9 +116,9 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 				} else {
 					s.writeToConn(conn, fmt.Sprintf("пользователь %s успешно зарегестрирован", arg))
 				}
-
 			case cmd.NewChat:
 				s.newChat(ctx, conn, arg)
+				s.writeToConn(conn, "чат завершен")
 			default:
 				log.Print(arg)
 			}
@@ -142,66 +143,50 @@ func (s *Server) newChat(ctx context.Context, conn net.Conn, name string) {
 	}
 	you.Conn = conn
 
-	contr, err := s.db.UserByName(ctx, string(name))
+	contact, err := s.db.UserByName(ctx, string(name))
 	if err != nil {
 		s.writeToConn(conn, fmt.Sprintf("ошибка поиска аккаунта %s", string(name)))
 		return
 	}
 	var ok bool
-	contr.Conn, ok = s.activeConns[contr.Addr]
+	contact.Conn, ok = s.activeConns[contact.Addr]
 	if !ok {
 		s.writeToConn(conn, fmt.Sprintf("отсутствует соединение с аккаунтом %s", string(name)))
 		return
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(2)
-
-	go s.chatRoom(ctx, you, contr, &wg)
-	go s.chatRoom(ctx, contr, you, &wg)
-
+	wg.Add(1)
+	go s.chatRoom(ctx, you, contact, &wg)
 	wg.Wait()
 }
 
-func (s *Server) chatRoom(ctx context.Context, you, contr *user.User, wg *sync.WaitGroup) {
+func (s *Server) chatRoom(ctx context.Context, you, contact *user.User, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	ctx1, cancel := context.WithCancel(ctx)
-	defer cancel()
+	buf := bufio.NewReader(you.Conn)
 
-	readCh := make(chan string)
-	buf := make([]byte, 1024)
-
-	go func() {
-		for {
-			select {
-			case <-ctx1.Done():
-				return
-			default:
-				n, err := you.Conn.Read(buf)
-				if err != nil {
-					close(readCh)
-					return
-				}
-				readCh <- string(buf[:n-1]) // убираем \n
-			}
-		}
-	}()
+	you.Conn.Write([]byte(fmt.Sprintf("начат чат с %s\n", contact.Nick)))
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case text, ok := <-readCh:
-			if !ok {
+		default:
+			text, err := buf.ReadString('\n')
+			if err != nil && err == io.EOF {
+				return
+			} else if err != nil {
+				log.Printf("ошибка чтения: %s\n", err)
+			}
+
+			text = strings.TrimSuffix(text, "\n")
+
+			if text == cmd.CloseChat {
 				return
 			}
 
-			if text == cmd.CloseRemoteChat {
-				return
-			}
-
-			_, err := contr.Conn.Write([]byte(you.Nick + ": " + text + "\n"))
+			_, err = contact.Conn.Write([]byte(you.Nick + ": " + text + "\n"))
 			if err != nil {
 				log.Printf("ошибка записи: %s\n", err)
 			}
