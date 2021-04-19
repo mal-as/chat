@@ -49,7 +49,6 @@ func (c *Client) readStdin(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		default:
-			fmt.Print("> ")
 			data, err := buf.ReadBytes('\n')
 			if err == io.EOF {
 				return
@@ -71,13 +70,14 @@ func (c *Client) readSrvConn(ctx context.Context) {
 			return
 		default:
 			data, err := buf.ReadBytes('\n')
-			if err == io.EOF {
-				return
-			} else if err != nil {
+			if err != nil {
+				if c.isClosed {
+					return
+				}
 				log.Printf("ошибка чтения из буфера: %s", err)
 				continue
 			}
-			fmt.Print(string(data[:len(data)-1]) + "\n> ")
+			fmt.Print(string(data))
 		}
 	}
 }
@@ -87,6 +87,8 @@ func (c *Client) scanInput(ctx context.Context) {
 
 	go c.readStdin(ctx)
 	go c.readSrvConn(ctx)
+
+	fmt.Println("client started")
 
 	for {
 		select {
@@ -99,15 +101,15 @@ func (c *Client) scanInput(ctx context.Context) {
 			switch command {
 			case cmd.RegisterNewUser:
 				if arg == "" {
-					fmt.Print("введите ваше имя\n> ")
+					fmt.Println("введите ваше имя")
 					continue
 				}
 				if err := c.registerUser(ctx, arg); err != nil {
-					fmt.Printf("ошибка регистрации пользователя %s: %s\n> ", arg, err)
+					fmt.Printf("ошибка регистрации пользователя %s: %s\n", arg, err)
 				}
 			case cmd.NewChat:
 				if arg == "" {
-					fmt.Print("введите имя собеседника\n> ")
+					fmt.Println("введите имя собеседника")
 					continue
 				}
 				c.chat(ctx, arg)
