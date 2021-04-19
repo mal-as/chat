@@ -23,9 +23,6 @@ type Client struct {
 }
 
 func New(addr string) (*Client, error) {
-	log.SetFlags(0)
-	log.SetPrefix("> ")
-
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		return nil, err
@@ -52,12 +49,12 @@ func (c *Client) readStdin(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		default:
-			log.Printf("")
+			fmt.Print("> ")
 			data, err := buf.ReadBytes('\n')
 			if err == io.EOF {
 				return
 			} else if err != nil {
-				print(fmt.Sprintf("ошибка чтения из консоли: %s\n", err))
+				log.Printf("ошибка чтения из консоли: %s", err)
 				continue
 			}
 
@@ -77,13 +74,10 @@ func (c *Client) readSrvConn(ctx context.Context) {
 			if err == io.EOF {
 				return
 			} else if err != nil {
-				if c.isClosed {
-					return
-				}
 				log.Printf("ошибка чтения из буфера: %s", err)
 				continue
 			}
-			log.Printf(string(data))
+			fmt.Print(string(data[:len(data)-1]) + "\n> ")
 		}
 	}
 }
@@ -105,20 +99,20 @@ func (c *Client) scanInput(ctx context.Context) {
 			switch command {
 			case cmd.RegisterNewUser:
 				if arg == "" {
-					log.Printf("введите ваше имя")
+					fmt.Print("введите ваше имя\n> ")
 					continue
 				}
 				if err := c.registerUser(ctx, arg); err != nil {
-					log.Printf("ошибка регистрации пользователя %s: %s", arg, err)
+					fmt.Printf("ошибка регистрации пользователя %s: %s\n> ", arg, err)
 				}
 			case cmd.NewChat:
 				if arg == "" {
-					log.Printf("введите имя собеседника")
+					fmt.Print("введите имя собеседника\n> ")
 					continue
 				}
 				c.chat(ctx, arg)
 			default:
-				log.Printf("неверная команда %s: доступны команды login и chat с аргументом <name>", command)
+				fmt.Printf("неверная команда %s: доступны команды login и chat с аргументом <name>\n", command)
 			}
 		}
 	}
