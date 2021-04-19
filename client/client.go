@@ -16,9 +16,10 @@ import (
 var errCtxCanceled = errors.New("context is canceled")
 
 type Client struct {
-	conn   net.Conn
-	inCh   chan []byte
-	stopCh chan struct{}
+	conn     net.Conn
+	inCh     chan []byte
+	stopCh   chan struct{}
+	isClosed bool
 }
 
 func New(addr string) (*Client, error) {
@@ -35,6 +36,7 @@ func (c *Client) Start(ctx context.Context) {
 }
 
 func (c *Client) Stop(cancel context.CancelFunc) {
+	c.isClosed = true
 	cancel()
 
 	<-c.stopCh
@@ -47,7 +49,6 @@ func (c *Client) readStdin(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		default:
-			fmt.Print("> ")
 			data, err := buf.ReadBytes('\n')
 			if err == io.EOF {
 				return
@@ -69,13 +70,14 @@ func (c *Client) readSrvConn(ctx context.Context) {
 			return
 		default:
 			data, err := buf.ReadBytes('\n')
-			if err == io.EOF {
-				return
-			} else if err != nil {
+			if err != nil {
+				if c.isClosed {
+					return
+				}
 				log.Printf("ошибка чтения из буфера: %s", err)
 				continue
 			}
-			fmt.Print(string(data[:len(data)-1]) + "\n> ")
+			fmt.Print(string(data))
 		}
 	}
 }
@@ -86,6 +88,8 @@ func (c *Client) scanInput(ctx context.Context) {
 	go c.readStdin(ctx)
 	go c.readSrvConn(ctx)
 
+	fmt.Println("client started")
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -94,19 +98,21 @@ func (c *Client) scanInput(ctx context.Context) {
 		case data := <-c.inCh:
 			command, arg := cmd.Parse(data)
 
-			if arg == "" {
-				fmt.Print("необходим аргумент\n> ")
-				continue
-			}
-
 			switch command {
 			case cmd.RegisterNewUser:
+				if arg == "" {
+					fmt.Println("введите ваше имя")
+					continue
+				}
 				if err := c.registerUser(ctx, arg); err != nil {
-					fmt.Printf("ошибка регистрации пользователя %s: %s", arg, err)
+					fmt.Printf("ошибка регистрации пользователя %s: %s\n", arg, err)
 				}
 			case cmd.NewChat:
+				if arg == "" {
+					fmt.Println("введите имя собеседника")
+					continue
+				}
 				c.chat(ctx, arg)
-				fmt.Print("чат завершен\n> ")
 			default:
 				fmt.Printf("неверная команда %s: доступны команды login и chat с аргументом <name>\n", command)
 			}
@@ -134,8 +140,8 @@ func (c *Client) chat(ctx context.Context, name string) {
 		case <-ctx.Done():
 			return
 		case data := <-c.inCh:
-			if string(data) == cmd.CloseLocalChat {
-				if _, err := c.conn.Write([]byte(cmd.CloseRemoteChat + "n")); err != nil {
+			if string(data) == cmd.CloseChat {
+				if _, err := c.conn.Write([]byte(cmd.CloseChat + "\n")); err != nil {
 					log.Printf("ошибка отправки данных в чат %s\n", err)
 				}
 				return
